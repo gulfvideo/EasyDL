@@ -19,6 +19,11 @@ ceiling, and it downloads them with a proper queue, a real menu bar, and drag an
 - **Sign-in support** — for age-restricted, members-only and private videos
 - **1000+ sites**, not just YouTube — anything yt-dlp supports
 
+<p align="center">
+  <img src="docs/screenshot.png" width="880"
+       alt="EasyDL on macOS: a download queue with YouTube videos finishing as MP4 and MP3, showing speed and ETA">
+</p>
+
 ---
 
 ## Contents
