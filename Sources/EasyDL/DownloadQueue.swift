@@ -176,7 +176,7 @@ final class DownloadQueue {
                 $0.playlistPosition = p.playlistPosition
                 if !p.title.isEmpty { $0.title = p.title }
             }
-        } else if let path = YTDLP.parseDone(line) {
+        } else if let path = YTDLP.parseDone(line), YTDLP.isInside(path, directory: prefs.outputDir) {
             update(id) {
                 $0.filePath = path
                 if $0.title.isEmpty {

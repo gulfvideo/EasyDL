@@ -191,9 +191,18 @@ enum YTDLP {
         return !ext.isEmpty && openableExtensions.contains(ext)
     }
 
+    /// The title and the file path are chosen by the remote server, and they are the
+    /// only free-form strings in this line.
+    ///
+    /// SECURITY: with a plain `s` conversion a newline inside a title passes through
+    /// verbatim and splits the output into two lines — so a video titled
+    /// "Innocent\n@@DONE@@/somewhere/else.mp4" forges one of our own marker lines and
+    /// takes over the file path we later reveal or open. The `j` conversion JSON-encodes
+    /// the value, which escapes the newline and quotes the result, so a field can never
+    /// become a line. Both are decoded again in the parsers below.
     static let progressTemplate =
         "download:\(progressMarker)%(progress._percent_str)s|%(progress._speed_str)s"
-        + "|%(progress._eta_str)s|%(info.playlist_index)s|%(info.n_entries)s|%(info.title)s"
+        + "|%(progress._eta_str)s|%(info.playlist_index)s|%(info.n_entries)s|%(info.title)j"
 
     static func arguments(for spec: DownloadSpec) -> [String] {
         var args = [
@@ -208,7 +217,7 @@ enum YTDLP {
             // recording written out as 21 minutes, exit code 0. Fail loudly instead.
             "--abort-on-unavailable-fragments",
             "--progress-template", progressTemplate,
-            "--print", "after_move:\(doneMarker)%(filepath)s",
+            "--print", "after_move:\(doneMarker)%(filepath)j",
             "--paths", spec.outputDir,
             "-o", outputTemplate,
             "--concurrent-fragments", String(spec.concurrentFragments),
@@ -332,8 +341,12 @@ enum YTDLP {
     }
 
     /// Returns nil for any line that isn't one of our progress lines.
+    ///
+    /// The marker must begin the line: a marker found anywhere would let a field that
+    /// merely contains the text "@@P@@" be mistaken for one of our own lines.
     static func parseProgress(_ line: String) -> Progress? {
-        guard let r = line.range(of: progressMarker) else { return nil }
+        guard line.hasPrefix(progressMarker) else { return nil }
+        let r = line.startIndex..<line.index(line.startIndex, offsetBy: progressMarker.count)
         // Title is last and may itself contain "|", so cap the split and keep the remainder.
         let fields = line[r.upperBound...].split(separator: "|", maxSplits: 5,
                                                  omittingEmptySubsequences: false)
@@ -347,7 +360,7 @@ enum YTDLP {
             speed: cleanStat(fields[1]),
             eta: cleanStat(fields[2]),
             playlistPosition: playlistPosition(index: clean(fields[3]), total: clean(fields[4])),
-            title: clean(fields[5])
+            title: decodeJSON(clean(fields[5]))
         )
     }
 
@@ -440,10 +453,44 @@ enum YTDLP {
     }
 
     /// Returns the final file path for a completed download, or nil.
+    ///
+    /// Anchored to the start of the line for the same reason as parseProgress.
     static func parseDone(_ line: String) -> String? {
-        guard let r = line.range(of: doneMarker) else { return nil }
-        let path = String(line[r.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard line.hasPrefix(doneMarker) else { return nil }
+        let raw = String(line.dropFirst(doneMarker.count))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let path = decodeJSON(raw)
         return path.isEmpty ? nil : path
+    }
+
+    /// True when `path` is the download folder or something inside it. Both sides are
+    /// standardised first so /tmp vs /private/tmp does not read as an escape.
+    ///
+    /// Defence in depth: the only file path EasyDL acts on comes from yt-dlp's own
+    /// output, and --paths already confines it. This means a forged path would still be
+    /// ignored rather than revealed or opened.
+    static func isInside(_ path: String, directory: String) -> Bool {
+        guard !path.isEmpty, !directory.isEmpty else { return false }
+        let file = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath()
+        let root = URL(fileURLWithPath: directory, isDirectory: true)
+            .standardizedFileURL.resolvingSymlinksInPath()
+        let rootPath = root.path.hasSuffix("/") ? root.path : root.path + "/"
+        return file.path == root.path || file.path.hasPrefix(rootPath)
+    }
+
+    /// Undoes the `j` conversion. Falls back to the raw text for anything that isn't a
+    /// JSON string, so an older yt-dlp that ignored `j` still works.
+    static func decodeJSON(_ raw: String) -> String {
+        guard raw.hasPrefix("\""), raw.hasSuffix("\""), raw.count >= 2,
+              let data = raw.data(using: .utf8),
+              let decoded = try? JSONSerialization.jsonObject(with: data,
+                                                             options: [.fragmentsAllowed]) as? String
+        else { return raw }
+        // A decoded title can still hold newlines or other control characters; they are
+        // harmless now that they cannot split a line, but they have no business in a
+        // one-line table cell either.
+        return decoded.filter { !$0.unicodeScalars.contains(where: { u in
+            u.properties.generalCategory == .control }) }
     }
 
     /// yt-dlp writes the string "NA" for fields that don't apply to this download.

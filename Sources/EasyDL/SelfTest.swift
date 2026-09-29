@@ -248,6 +248,50 @@ enum SelfTest {
             check(!YTDLP.isSafeToOpen(unsafe), "\(unsafe) must NOT be opened")
         }
 
+        // --- a remote title must not be able to forge one of our own lines ---------
+        // A plain %(title)s lets a newline split the output in two, so a video called
+        // "Innocent\n@@DONE@@/elsewhere.mp4" would hand us someone else's path.
+        check(YTDLP.progressTemplate.hasSuffix("%(info.title)j"),
+              "the title must stay JSON-encoded: \(YTDLP.progressTemplate)")
+        check(YTDLP.arguments(for: spec()).contains { $0.contains("%(filepath)j") },
+              "the completed path must stay JSON-encoded")
+
+        // The decoded value stays in its field, and control characters are dropped.
+        let forged = YTDLP.parseProgress(#"@@P@@ 50.0%|1MiB/s|00:01|NA|NA|"Innocent\n@@DONE@@/etc/passwd""#)
+        check(forged != nil, "a JSON-encoded title should still parse")
+        check(forged?.title == "Innocent@@DONE@@/etc/passwd",
+              "decoded title wrong: \(forged?.title ?? "nil")")
+        check(!(forged?.title.contains("\n") ?? true), "a newline survived into the title")
+
+        // Markers are only markers at the start of a line.
+        check(YTDLP.parseDone("@@P@@ 1%|x|y|NA|NA|see @@DONE@@/etc/passwd") == nil,
+              "a marker inside a field was treated as a real marker")
+        check(YTDLP.parseProgress("[info] @@P@@ 1%|a|b|c|d|e") == nil,
+              "a marker mid-line was treated as a progress line")
+        check(YTDLP.parseDone(#"@@DONE@@"/Users/me/Downloads/a b.mp4""#) == "/Users/me/Downloads/a b.mp4",
+              "a JSON-encoded path should decode")
+        // Older yt-dlp that ignored the j conversion must still work.
+        check(YTDLP.parseDone("@@DONE@@/Users/me/Downloads/plain.mp4") == "/Users/me/Downloads/plain.mp4",
+              "an unquoted path should still parse")
+
+        // --- a completed path is only trusted inside the download folder -----------
+        check(YTDLP.isInside("/Users/me/Downloads/a.mp4", directory: "/Users/me/Downloads"),
+              "a file in the folder should count as inside")
+        check(YTDLP.isInside("/Users/me/Downloads/Mix [PL1]/a.mp4", directory: "/Users/me/Downloads"),
+              "a playlist subfolder should count as inside")
+        check(YTDLP.isInside("/Users/me/Downloads", directory: "/Users/me/Downloads"),
+              "the folder itself should count as inside")
+        check(!YTDLP.isInside("/Users/me/secret.mp4", directory: "/Users/me/Downloads"),
+              "the parent folder must not count as inside")
+        check(!YTDLP.isInside("/etc/passwd", directory: "/Users/me/Downloads"),
+              "an unrelated path must not count as inside")
+        check(!YTDLP.isInside("/Users/me/Downloads2/a.mp4", directory: "/Users/me/Downloads"),
+              "a sibling folder with a shared prefix must not count as inside")
+        check(!YTDLP.isInside("/Users/me/Downloads/../secret.mp4", directory: "/Users/me/Downloads"),
+              "a .. path must be resolved before comparing")
+        check(!YTDLP.isInside("", directory: "/Users/me/Downloads"), "an empty path must be rejected")
+        check(!YTDLP.isInside("/Users/me/Downloads/a.mp4", directory: ""), "an empty folder must be rejected")
+
         // --- no argument injection through the one structured string we build -------
         // Everything else is its own argv entry; only extractor-args concatenates, where
         // ";" separates arguments and ":" ends the extractor name.

@@ -37,6 +37,13 @@ options.
 - **`PYTHONPATH`, `PYTHONHOME`, `PYTHONSTARTUP` and `PYTHONWARNINGS` are stripped** from
   the child environment, because `yt-dlp` is a Python program and those would let
   inherited environment variables decide what it imports.
+- **Remote strings are JSON-encoded in yt-dlp's output.** EasyDL reads progress and
+  completion back out of yt-dlp's stdout using marker lines. Video titles are chosen by
+  the server, and with a plain `%(title)s` a newline inside a title splits the output
+  into two lines — so a video called `Innocent\n@@DONE@@/somewhere/else.mp4` could forge
+  a completion line and take over the path EasyDL later reveals or opens. The `j`
+  conversion escapes it, the markers are only recognised at the start of a line, and a
+  completed path is ignored unless it resolves inside your download folder.
 - **The saved queue is `0600`.** It records every URL you have downloaded.
 
 ## Things you are trusting
