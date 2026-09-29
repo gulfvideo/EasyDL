@@ -8,3 +8,9 @@ node_modules/
 
 .DS_Store
 dist/
+
+# Agent skills installed via `npx skills add`. Local tooling, not part of the app —
+# delete these three lines if you'd rather contributors got the same skills.
+.agents/
+.claude/
+skills-lock.json
