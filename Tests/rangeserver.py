@@ -61,7 +61,7 @@ class Handler(BaseHTTPRequestHandler):
         if match:
             start = int(match.group(1))
             if match.group(2):
-                end = int(match.group(2))
+                end = min(int(match.group(2)), total - 1)   # a client may over-ask
             if start >= total:
                 self.send_response(416)
                 self.send_header("Content-Range", f"bytes */{total}")

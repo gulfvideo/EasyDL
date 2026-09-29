@@ -52,9 +52,14 @@ final class DownloadQueue {
     func pause(_ ids: Set<UUID>) {
         for id in ids where status(of: id) == .running {
             if let p = processes[id], p.isRunning {
-                // ponytail: SIGSTOP freezes yt-dlp mid-transfer; the server may drop the
-                // connection on a long pause, in which case --continue resumes it on resume.
-                kill(p.processIdentifier, SIGSTOP)
+                // SIGSTOP freezes yt-dlp mid-transfer; the server may drop the connection
+                // on a long pause, in which case --continue picks it up again.
+                //
+                // SECURITY: suspend()/resume()/terminate() go through Foundation, which
+                // knows whether this child is still alive. Sending a raw signal to a
+                // stored pid races with the process exiting — the kernel may already have
+                // recycled that pid for something else, and we would signal a stranger.
+                _ = p.suspend()
                 update(id) { $0.status = .paused; $0.speed = ""; $0.eta = "" }
             }
         }
@@ -65,7 +70,7 @@ final class DownloadQueue {
             switch status(of: id) {
             case .paused:
                 if let p = processes[id], p.isRunning {
-                    kill(p.processIdentifier, SIGCONT)
+                    _ = p.resume()
                     update(id) { $0.status = .running }
                 }
             case .failed, .canceled:
@@ -82,7 +87,7 @@ final class DownloadQueue {
             guard let s = status(of: id), !s.isFinished else { continue }
             if let p = processes[id], p.isRunning {
                 canceling.insert(id)
-                kill(p.processIdentifier, SIGCONT)   // a stopped process can't act on SIGTERM
+                _ = p.resume()          // a suspended process can't act on terminate()
                 p.terminate()
             } else {
                 update(id) { $0.status = .canceled }
@@ -127,6 +132,16 @@ final class DownloadQueue {
         proc.standardOutput = pipe
         proc.standardError = pipe
         proc.standardInput = FileHandle.nullDevice
+
+        // yt-dlp is a Python program, so PYTHONPATH / PYTHONHOME / PYTHONSTARTUP in the
+        // inherited environment can make it import code of someone else's choosing.
+        // Nothing here needs them. PATH is kept deliberately: the PO token provider
+        // resolves node/deno through it.
+        var env = ProcessInfo.processInfo.environment
+        for key in ["PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PYTHONWARNINGS"] {
+            env.removeValue(forKey: key)
+        }
+        proc.environment = env
 
         do {
             try proc.run()
@@ -250,7 +265,7 @@ final class DownloadQueue {
     /// Stops every child process. Called on quit so we don't orphan yt-dlp.
     func terminateAll() {
         for (_, p) in processes where p.isRunning {
-            kill(p.processIdentifier, SIGCONT)
+            _ = p.resume()
             p.terminate()
         }
         save()
@@ -269,6 +284,10 @@ final class DownloadQueue {
     private func save() {
         guard let data = try? JSONEncoder().encode(items) else { return }
         try? data.write(to: Self.storeURL, options: .atomic)
+        // The queue records every URL you have downloaded. Application Support is
+        // user-only already; this keeps that true if the file is ever copied elsewhere.
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600],
+                                               ofItemAtPath: Self.storeURL.path)
     }
 
     private func load() {

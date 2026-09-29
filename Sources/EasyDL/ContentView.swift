@@ -72,7 +72,15 @@ struct ContentView: View {
             // Double-click: open the finished file, otherwise show why it isn't finished.
             guard let item = ids.first.flatMap(queue.item) else { return }
             if let path = item.filePath, item.status == .done {
-                NSWorkspace.shared.open(URL(fileURLWithPath: path))
+                // The extension comes from whatever the server offered, not from the
+                // format the user picked, and yt-dlp's output carries no quarantine
+                // flag — so a hostile URL yielding "clip.command" would just run on a
+                // double-click. Anything not on the media allowlist is revealed instead.
+                if YTDLP.isSafeToOpen(path) {
+                    NSWorkspace.shared.open(URL(fileURLWithPath: path))
+                } else {
+                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+                }
             } else if item.status == .failed {
                 errorItem = item
             }

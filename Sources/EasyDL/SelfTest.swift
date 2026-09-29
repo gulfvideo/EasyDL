@@ -20,6 +20,7 @@ enum SelfTest {
         testFallbackBehaviour()
         testInvariants()
         testPOTokenProvider()
+        testSecurity()
         testProgressParsing()
         testDoneParsing()
         testDiagnosis()
@@ -222,6 +223,63 @@ enum SelfTest {
               "default location moved: \(Prefs.defaultPotHome)")
     }
 
+    // MARK: - Security
+
+    private static func testSecurity() {
+        // --- a hostile playlist name must not become a real ".." path component -----
+        // yt-dlp replaces "/" inside a field value but leaves a lone ".." alone, and its
+        // sanitize_path() does not drop ".." on macOS. The bracketed id suffix is keyed
+        // on playlist_title, so the directory is never exactly "." or ".." even when the
+        // id is missing. Tests/e2e.sh renders this against yt-dlp's real engine.
+        let t = YTDLP.outputTemplate
+        check(t.hasPrefix("%(playlist_title|.)s%(playlist_title& [|)s"),
+              "the traversal guard was removed from the template: \(t)")
+        check(t.contains("%(playlist_title&]|)s/"), "closing guard missing: \(t)")
+
+        // --- double-click must not execute what the server chose to hand us ---------
+        for safe in ["a.mp4", "a.MP4", "a.mkv", "a.mp3", "a.m4a", "a.webm", "a.srt",
+                     "/Users/me/Downloads/Clip [id].mp4"] {
+            check(YTDLP.isSafeToOpen(safe), "\(safe) should be openable")
+        }
+        for unsafe in ["a.command", "a.app", "a.sh", "a.scpt", "a.terminal", "a.workflow",
+                       "a.pkg", "a.dmg", "a.jar", "a.py", "a.rb", "a.zip", "a.html",
+                       "a.webloc", "a.url", "a.shortcut", "a", "", "a.", "noext",
+                       "a.mp4.command", "/tmp/evil.command"] {
+            check(!YTDLP.isSafeToOpen(unsafe), "\(unsafe) must NOT be opened")
+        }
+
+        // --- no argument injection through the one structured string we build -------
+        // Everything else is its own argv entry; only extractor-args concatenates, where
+        // ";" separates arguments and ":" ends the extractor name.
+        for hostile in ["/tmp/p;youtube:player_client=evil", "/tmp/p:x", "/tmp/a;b"] {
+            var s = spec()
+            s.potServerHome = hostile
+            let a = YTDLP.arguments(for: s)
+            check(!a.contains { $0.contains(hostile) },
+                  "a path containing ; or : reached extractor-args: \(hostile)")
+        }
+        var clean = spec()
+        clean.potServerHome = "/opt/prov/server"
+        check(YTDLP.arguments(for: clean).contains("youtubepot-bgutilscript:server_home=/opt/prov/server"),
+              "an ordinary path should still be passed")
+
+        // --- a URL can never be read as an option ----------------------------------
+        for hostile in ["--exec=touch /tmp/pwned", "-o/tmp/x", "--paths=/etc", "-",
+                        "--config-location=/tmp/evil.conf"] {
+            check(YTDLP.extractURLs(from: hostile).isEmpty,
+                  "option-shaped text was accepted as a URL: \(hostile)")
+        }
+        // ...and one that merely contains flag-looking text is passed as a single URL.
+        let tricky = "https://example.com/a?x=--exec%20touch"
+        check(YTDLP.extractURLs(from: tricky) == [tricky], "a legitimate URL was mangled")
+
+        var u = spec()
+        u.url = tricky
+        let ua = YTDLP.arguments(for: u)
+        check(ua.last == tricky, "URL must be last")
+        check(ua[ua.count - 2] == "--", "URL must be preceded by -- so it can't parse as a flag")
+    }
+
     // MARK: - Invariants that hold for every download
 
     private static func testInvariants() {
@@ -234,6 +292,7 @@ enum SelfTest {
                     let a = YTDLP.arguments(for: s)
 
                     check(a.last == s.url, "URL must be last, got \(a.last ?? "nil")")
+                    check(a[a.count - 2] == "--", "the -- separator went missing")
                     check(a.filter { $0 == s.url }.count == 1, "URL appears twice")
                     // yt-dlp skips unavailable fragments and still exits 0, which writes
                     // a short file that looks perfectly valid.
@@ -257,7 +316,8 @@ enum SelfTest {
 
         // Playlists get a folder; single videos stay flat. The `|.` fallback resolves
         // to "./" which the path join swallows.
-        check(YTDLP.outputTemplate.hasPrefix("%(playlist_title|.)s/"), "playlist folder lost")
+        check(YTDLP.outputTemplate.hasPrefix("%(playlist_title|.)s"), "playlist folder lost")
+        check(YTDLP.outputTemplate.contains("]|)s/"), "the folder separator went missing")
         check(YTDLP.outputTemplate.contains("%(playlist_index&{:03d} - |)s"), "numbering lost")
         check(YTDLP.outputTemplate.contains("%(ext)s"), "extension lost")
     }

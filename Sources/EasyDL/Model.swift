@@ -156,11 +156,40 @@ enum YTDLP {
     static let doneMarker = "@@DONE@@"
 
     /// Playlist entries land in a folder named after the playlist; single videos land
-    /// flat. The `|.` fallback resolves to "./", which the path join swallows — verified
-    /// against yt-dlp's own template engine, the more obvious `%(playlist_title&{}/|)s`
-    /// sanitises its slash into U+29F8 and silently gives you one long filename.
+    /// flat. The `|.` fallback resolves to "./", which the path join swallows — the more
+    /// obvious `%(playlist_title&{}/|)s` sanitises its slash into U+29F8 and silently
+    /// gives you one long filename instead of a folder.
+    ///
+    /// SECURITY: the folder name is remote-controlled, and it is a real path component.
+    /// yt-dlp replaces "/" in a field value but leaves a lone ".." alone, and its
+    /// sanitize_path() does not drop ".." on macOS — so a playlist titled exactly ".."
+    /// wrote one level ABOVE the chosen download folder. The bracketed id suffix exists
+    /// to stop that: it is emitted whenever playlist_title is present (not when
+    /// playlist_id is), so the directory can never be exactly "." or "..", even if the
+    /// id is missing or empty. Single videos still collapse to "./".
     static let outputTemplate =
-        "%(playlist_title|.)s/%(playlist_index&{:03d} - |)s%(title)s [%(id)s].%(ext)s"
+        "%(playlist_title|.)s%(playlist_title& [|)s%(playlist_id|)s%(playlist_title&]|)s/"
+        + "%(playlist_index&{:03d} - |)s%(title)s [%(id)s].%(ext)s"
+
+    /// Extensions EasyDL will hand to `NSWorkspace.open`. Everything else is revealed in
+    /// the Finder instead.
+    ///
+    /// SECURITY: the file extension comes from the *server*, not from the user's choice
+    /// — yt-dlp derives it from the format it was offered. A hostile URL can therefore
+    /// produce a download called `clip.command` or `clip.app`, and opening that executes
+    /// it. Files written by yt-dlp carry no quarantine flag, so Gatekeeper would not
+    /// warn either. Double-click only opens things that are inert to open.
+    static let openableExtensions: Set<String> = [
+        "mp4", "m4v", "mov", "mkv", "webm", "avi", "flv", "mpg", "mpeg", "ts", "m2ts",
+        "mp3", "m4a", "aac", "opus", "ogg", "oga", "flac", "wav", "aiff", "wma",
+        "jpg", "jpeg", "png", "gif", "webp", "txt", "vtt", "srt", "ass", "pdf",
+    ]
+
+    /// True when double-clicking this file should open it rather than reveal it.
+    static func isSafeToOpen(_ path: String) -> Bool {
+        let ext = (path as NSString).pathExtension.lowercased()
+        return !ext.isEmpty && openableExtensions.contains(ext)
+    }
 
     static let progressTemplate =
         "download:\(progressMarker)%(progress._percent_str)s|%(progress._speed_str)s"
@@ -200,7 +229,10 @@ enum YTDLP {
         // away. Script mode runs the generator on demand — no daemon to supervise.
         // This is a second --extractor-args on purpose: yt-dlp merges repeated ones,
         // and the two keys address different extractors.
-        if !spec.potServerHome.isEmpty {
+        // ";" separates extractor arguments and ":" ends the extractor name, so a path
+        // containing either would inject additional arguments into this one string.
+        // Everything else travels as its own argv entry and cannot.
+        if !spec.potServerHome.isEmpty, !spec.potServerHome.contains(where: { $0 == ";" || $0 == ":" }) {
             args += ["--extractor-args",
                      "youtubepot-bgutilscript:server_home=\(spec.potServerHome)"]
         }
@@ -239,6 +271,9 @@ enum YTDLP {
             args += ["-S", "ext:mp4:m4a", "--merge-output-format", "mp4"]
         }
 
+        // Belt and braces: extractURLs already requires an http(s) prefix, so a URL can
+        // never look like a flag. "--" makes that structural rather than incidental.
+        args.append("--")
         args.append(spec.url)
         return args
     }

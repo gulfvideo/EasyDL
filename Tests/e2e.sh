@@ -52,6 +52,15 @@ run_easydl() {
   LAST_RC=$?
 }
 
+# The app's argument list ends with "-- <url>". Anything appended after that is a
+# positional argument, not a flag — so splice extras in ahead of the separator.
+# Put the extras in EXTRA_ARGS; the result comes back in SPLICED.
+splice_before_url() {   # usage: splice_before_url "${args[@]}"
+  local all=("$@") n=$#
+  local url="${all[n-1]}"
+  SPLICED=("${all[@]:0:n-2}" "${EXTRA_ARGS[@]}" "--" "$url")
+}
+
 dur()    { ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$1" 2>/dev/null; }
 height() { ffprobe -v error -select_streams v:0 -show_entries stream=height -of default=nw=1:nk=1 "$1" 2>/dev/null; }
 acodec() { ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of default=nw=1:nk=1 "$1" 2>/dev/null; }
@@ -227,7 +236,8 @@ from yt_dlp import YoutubeDL
 tpl = sys.argv[1]
 ydl = YoutubeDL({'outtmpl': tpl, 'quiet': True})
 single = {'title': 'Holiday', 'id': 'abc', 'ext': 'mp4'}
-entry  = {'title': 'Track', 'id': 'xyz', 'ext': 'mp3', 'playlist_title': 'My Mix', 'playlist_index': 3}
+entry  = {'title': 'Track', 'id': 'xyz', 'ext': 'mp3', 'playlist_title': 'My Mix',
+          'playlist_id': 'PL7', 'playlist_index': 3}
 tricky = {'title': 'AC/DC: "Live" 1/2', 'id': 'q', 'ext': 'mp4'}
 print(ydl.prepare_filename(single))
 print(ydl.prepare_filename(entry))
@@ -241,12 +251,68 @@ EOF
   t_line="$(echo "$out" | sed -n 3p | sed 's|^\./||')"
   [ "$s_line" = "Holiday [abc].mp4" ] && ok "single video stays flat: $s_line" \
     || bad "single video path wrong: $s_line"
-  [ "$p_line" = "My Mix/003 - Track [xyz].mp3" ] && ok "playlist entry foldered and numbered: $p_line" \
+  [ "$p_line" = "My Mix [PL7]/003 - Track [xyz].mp3" ] && ok "playlist entry foldered and numbered: $p_line" \
     || bad "playlist path wrong: $p_line"
   case "$t_line" in
     */*) bad "a title with a slash escaped into a subdirectory: $t_line" ;;
     *)   ok "unsafe title characters neutralised: $t_line" ;;
   esac
+fi
+
+# =============================================================================
+scenario "A hostile playlist name cannot escape the download folder"
+# The folder name is remote-controlled and is a real path component. yt-dlp replaces
+# "/" inside a field value but leaves a lone ".." alone, and sanitize_path() does not
+# drop ".." on macOS — so this is rendered through yt-dlp's own engine rather than
+# trusted to look right.
+tmpl="$("$WORK/argsfor" --url x --kind mp4 --outdir /tmp | tr '\0' '\n' | grep '%(playlist_title' | head -1)"
+if [ -z "$tmpl" ]; then bad "could not read the output template from the app"; else
+  out="$("$PY" - "$tmpl" <<'EOF'
+import sys, os
+from yt_dlp import YoutubeDL
+tpl, base = sys.argv[1], "/Users/me/Downloads"
+ydl = YoutubeDL({'outtmpl': tpl, 'paths': {'home': base}, 'quiet': True})
+cases = {
+  'dotdot':        {'playlist_title': '..', 'playlist_id': 'PL1', 'playlist_index': 1},
+  'dotdot_no_id':  {'playlist_title': '..', 'playlist_index': 1},
+  'dotdot_empty':  {'playlist_title': '..', 'playlist_id': '', 'playlist_index': 1},
+  'dot':           {'playlist_title': '.', 'playlist_id': 'PL1', 'playlist_index': 1},
+  'slashes':       {'playlist_title': '../../etc', 'playlist_id': 'PL1', 'playlist_index': 1},
+  'absolute':      {'playlist_title': '/etc/cron.d', 'playlist_id': 'PL1', 'playlist_index': 1},
+  'tilde':         {'playlist_title': '~', 'playlist_id': 'PL1', 'playlist_index': 1},
+  'title_dotdot':  {'title': '../../../etc/passwd'},
+  'title_null':    {'title': 'a\x00b'},
+}
+escapes = 0
+for name, extra in cases.items():
+    info = {'title': 'T', 'id': 'ID', 'ext': 'mp4'}; info.update(extra)
+    full = os.path.normpath(ydl.prepare_filename(info))
+    if not full.startswith(base + os.sep):
+        escapes += 1
+        print(f'ESCAPE {name} -> {full}')
+print(f'TOTAL_ESCAPES={escapes}')
+EOF
+)"
+  esc="$(echo "$out" | sed -n 's/^TOTAL_ESCAPES=//p')"
+  if [ "$esc" = "0" ]; then
+    ok "9 hostile playlist/title names all stayed inside the download folder"
+  else
+    bad "$esc name(s) escaped: $(echo "$out" | grep '^ESCAPE' | head -3 | tr '\n' ' ')"
+  fi
+  # And the ordinary case must still work.
+  norm="$("$PY" - "$tmpl" <<'EOF'
+import sys
+from yt_dlp import YoutubeDL
+ydl = YoutubeDL({'outtmpl': sys.argv[1], 'quiet': True})
+print(ydl.prepare_filename({'title': 'T', 'id': 'ID', 'ext': 'mp4'}))
+print(ydl.prepare_filename({'title': 'T', 'id': 'ID', 'ext': 'mp4',
+                            'playlist_title': 'My Mix', 'playlist_id': 'PL1', 'playlist_index': 3}))
+EOF
+)"
+  [ "$(echo "$norm" | sed -n 1p)" = "./T [ID].mp4" ] && ok "single videos still stay flat" \
+    || bad "single video path changed: $(echo "$norm" | sed -n 1p)"
+  [ "$(echo "$norm" | sed -n 2p)" = "My Mix [PL1]/003 - T [ID].mp4" ] && ok "playlists still get a folder" \
+    || bad "playlist path changed: $(echo "$norm" | sed -n 2p)"
 fi
 
 # =============================================================================
@@ -259,7 +325,9 @@ if [ ${#COOKIE_ARGS[@]} -eq 0 ]; then skip "no cookie file at $COOKIES"; else
     local args=() cap="$1"
     while IFS= read -r -d '' a; do args+=("$a"); done \
       < <("$WORK/argsfor" --url "$BBB" --kind mp4 --quality "$cap" --outdir "$WORK" "${COOKIE_ARGS[@]}")
-    yt-dlp "${args[@]}" --simulate --print "@@H@@%(height)s" 2>/dev/null \
+    EXTRA_ARGS=(--simulate --print "@@H@@%(height)s")
+    splice_before_url "${args[@]}"
+    yt-dlp "${SPLICED[@]}" 2>/dev/null \
       | grep -o '@@H@@[0-9]*' | head -1 | sed 's/@@H@@//'
   }
   for cap in 360 720 1080; do
@@ -346,7 +414,9 @@ if [ ${#COOKIE_ARGS[@]} -eq 0 ]; then skip "no cookie file"; else
     probe=()
     while IFS= read -r -d '' x; do probe+=("$x"); done \
       < <("$WORK/argsfor" --url "$YT_403" --kind mp3 --outdir "$WORK" --pot "$POT" "${COOKIE_ARGS[@]}")
-    info="$(yt-dlp "${probe[@]}" --simulate --print "@@F@@%(format_id)s|%(vcodec)s|%(filesize_approx)s" 2>/dev/null \
+    EXTRA_ARGS=(--simulate --print "@@F@@%(format_id)s|%(vcodec)s|%(filesize_approx)s")
+    splice_before_url "${probe[@]}"
+    info="$(yt-dlp "${SPLICED[@]}" 2>/dev/null \
             | grep -o '@@F@@.*' | head -1 | sed 's/@@F@@//')"
     vcodec="$(echo "$info" | cut -d'|' -f2)"; bytes="$(echo "$info" | cut -d'|' -f3)"
     [ "$vcodec" = "none" ] && ok "picks an audio-only stream (format $(echo "$info" | cut -d'|' -f1))" \

@@ -297,6 +297,14 @@ impossible to observe.
 Metadata, thumbnail and subtitle embedding; clipboard auto-watching; a built-in yt-dlp
 updater; notarized release builds. Contributions welcome.
 
+## Security
+
+See [SECURITY.md](SECURITY.md). Briefly: arguments are passed as an argv array (never a
+shell), URLs come after a `--` separator so they cannot be read as options, double-click
+only opens media extensions because the server picks the extension, playlist folder
+names are guarded against `..`, and `PYTHON*` variables are stripped from the child
+environment. The app is not sandboxed and not notarized, deliberately.
+
 ## Legal
 
 EasyDL is a front end for yt-dlp. Download only what you have the right to download, and

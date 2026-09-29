@@ -20,6 +20,13 @@ set -euo pipefail
 
 VERSION="2.0.0"
 REPO="https://github.com/Brainicism/bgutil-ytdlp-pot-provider"
+
+# Pinned by content, not by name. A git tag is a movable label: whoever controls the
+# upstream repository can re-point 2.0.0 at a different commit at any time, and a
+# release asset can be replaced in place. A commit id and a file hash cannot be
+# forged. Bump these together when you deliberately upgrade, after reading the diff.
+COMMIT="37169ee2656e08c5c2e5dc9df4c598c0cb4c88a8"
+PLUGIN_SHA256="bce874dfa25896c2798e0f4f8147b7b22e785479eb1e459ab232bf2506c95016"
 HOME_DIR="$HOME/Library/Application Support/EasyDL/pot-provider"
 PLUGIN_DIR="$HOME/.config/yt-dlp/plugins/bgutil-ytdlp-pot-provider"
 
@@ -33,18 +40,43 @@ fi
 command -v node >/dev/null || { echo "Needs Node. Try: brew install node"; exit 1; }
 command -v git  >/dev/null || { echo "Needs git."; exit 1; }
 
-echo "==> Fetching the generator ($VERSION)"
+echo "==> Fetching the generator ($VERSION, pinned to $COMMIT)"
 rm -rf "$HOME_DIR"
 mkdir -p "$(dirname "$HOME_DIR")"
-git clone --quiet --single-branch --branch "$VERSION" --depth 1 "$REPO.git" "$HOME_DIR"
+git clone --quiet --single-branch --branch "$VERSION" "$REPO.git" "$HOME_DIR"
 
-echo "==> Building it (npm ci, tsc)"
+GOT="$( cd "$HOME_DIR" && git rev-parse HEAD )"
+if [ "$GOT" != "$COMMIT" ]; then
+  echo "    REFUSING TO CONTINUE."
+  echo "    Tag $VERSION now points at $GOT, not the reviewed commit $COMMIT."
+  echo "    Upstream moved the tag. Read the diff before changing COMMIT in this script."
+  rm -rf "$HOME_DIR"
+  exit 1
+fi
+( cd "$HOME_DIR" && git checkout --quiet "$COMMIT" )
+
+# npm runs install scripts from the whole dependency tree, which is arbitrary code
+# execution on this Mac from packages neither of us has read. That is inherent to npm,
+# not specific to this project; it is the main reason the provider is optional.
+echo "==> Building it (npm ci, tsc) — this runs third-party install scripts"
 ( cd "$HOME_DIR/server" && npm ci --silent && npx tsc )
 
 echo "==> Installing the yt-dlp plugin"
 rm -rf "$PLUGIN_DIR"; mkdir -p "$PLUGIN_DIR"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
-curl -sL -o "$TMP/p.zip" "$REPO/releases/download/$VERSION/bgutil-ytdlp-pot-provider.zip"
+curl -fsSL -o "$TMP/p.zip" "$REPO/releases/download/$VERSION/bgutil-ytdlp-pot-provider.zip"
+
+# yt-dlp imports and runs this Python on every single invocation, so verify the bytes
+# before they land anywhere near the plugin folder.
+GOT_SHA="$( shasum -a 256 "$TMP/p.zip" | cut -d" " -f1 )"
+if [ "$GOT_SHA" != "$PLUGIN_SHA256" ]; then
+  echo "    REFUSING TO INSTALL."
+  echo "    Plugin archive does not match the reviewed copy."
+  echo "      expected $PLUGIN_SHA256"
+  echo "      got      $GOT_SHA"
+  rm -rf "$PLUGIN_DIR"
+  exit 1
+fi
 unzip -q -o "$TMP/p.zip" -d "$PLUGIN_DIR"
 
 echo "==> Checking yt-dlp picks it up"
