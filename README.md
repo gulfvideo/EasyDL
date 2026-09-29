@@ -12,7 +12,7 @@ ceiling, and it downloads them with a proper queue, a real menu bar, and drag an
 ![Built with Swift](https://img.shields.io/badge/built%20with-SwiftUI-orange)
 [![Latest release](https://img.shields.io/github/v/release/gulfvideo/EasyDL)](https://github.com/gulfvideo/EasyDL/releases/latest)
 
-**[Download EasyDL 1.0](https://github.com/gulfvideo/EasyDL/releases/latest)** —
+**[Download the latest release](https://github.com/gulfvideo/EasyDL/releases/latest)** —
 universal (Apple silicon and Intel), macOS 14+. It is ad-hoc signed rather than
 notarized, so macOS blocks it on first launch; the [release notes][rel] say how to get
 past that, and [building from source](#install) avoids it entirely.
