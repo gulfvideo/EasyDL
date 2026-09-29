@@ -10,6 +10,14 @@ ceiling, and it downloads them with a proper queue, a real menu bar, and drag an
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![Platform: macOS 14+](https://img.shields.io/badge/platform-macOS%2014%2B-lightgrey)
 ![Built with Swift](https://img.shields.io/badge/built%20with-SwiftUI-orange)
+[![Latest release](https://img.shields.io/github/v/release/gulfvideo/EasyDL)](https://github.com/gulfvideo/EasyDL/releases/latest)
+
+**[Download EasyDL 1.0](https://github.com/gulfvideo/EasyDL/releases/latest)** —
+universal (Apple silicon and Intel), macOS 14+. It is ad-hoc signed rather than
+notarized, so macOS blocks it on first launch; the [release notes][rel] say how to get
+past that, and [building from source](#install) avoids it entirely.
+
+[rel]: https://github.com/gulfvideo/EasyDL/releases/latest
 
 - **Batch downloads** — paste as many URLs as you like, one per line
 - **MP4 or MP3** — video with a resolution cap, or audio extracted to MP3
@@ -40,6 +48,9 @@ ceiling, and it downloads them with a proper queue, a real menu bar, and drag an
 - [Not included](#not-included)
 
 ## Install
+
+Either [download the release](https://github.com/gulfvideo/EasyDL/releases/latest) or
+build it — building takes about ten seconds and sidesteps the Gatekeeper warning.
 
 EasyDL needs [yt-dlp][ytdlp] and [ffmpeg][ffmpeg]. It does **not** bundle them, so
 `brew upgrade yt-dlp` is all it takes to keep up when YouTube changes something —
