@@ -80,11 +80,23 @@ fi
 unzip -q -o "$TMP/p.zip" -d "$PLUGIN_DIR"
 
 echo "==> Checking yt-dlp picks it up"
-if yt-dlp --ignore-config -v --simulate "https://www.youtube.com/watch?v=jNQXAC9IVRw" 2>&1 \
-   | grep -q "PO Token Providers:.*bgutil"; then
-  echo "    yt-dlp lists the provider."
+# Deliberately offline, against a URL that cannot be extracted: yt-dlp prints its
+# plugin directories at startup, before it touches the network. The obvious check —
+# piping a real YouTube extraction into grep — needs cookies to get far enough, and
+# under "set -o pipefail" it reports failure from yt-dlp's own non-zero exit even
+# when the grep matched.
+CHECK="$( yt-dlp --ignore-config -v --simulate "https://example.invalid/none" 2>&1 || true )"
+if echo "$CHECK" | grep -q "Plugin directories:.*bgutil"; then
+  echo "    yt-dlp loads the plugin."
 else
-  echo "    WARNING: yt-dlp did not list the provider. Check ~/.config/yt-dlp/plugins/."
+  echo "    WARNING: yt-dlp did not load the plugin. Check $PLUGIN_DIR."
+  exit 1
+fi
+
+if [ -f "$HOME_DIR/server/build/generate_once.js" ] || [ -f "$HOME_DIR/server/src/generate_once.ts" ]; then
+  echo "    Generator built."
+else
+  echo "    WARNING: the generator did not build. Check the npm output above."
   exit 1
 fi
 
