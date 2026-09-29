@@ -1,0 +1,9 @@
+# Build output
+.build/
+build/
+*.dSYM/
+
+# The PO token provider installs outside the repo, but just in case
+node_modules/
+
+.DS_Store
