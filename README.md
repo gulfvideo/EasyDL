@@ -97,6 +97,11 @@ the window, or press **⇧⌘V** to add whatever is on the clipboard.
   changes that to keeping them, or dropping them after a day, a week or a month. It only
   clears the list; your files are never touched.
 
+<p align="center">
+  <img src="docs/settings.png" width="520"
+       alt="EasyDL settings on macOS: download folder, default format and quality, clearing finished downloads, and how many download at once">
+</p>
+
 Interrupted downloads resume rather than restart: the queue is saved across launches and
 yt-dlp continues from the partial file. Quitting mid-download asks first.
 

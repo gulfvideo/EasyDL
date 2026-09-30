@@ -136,7 +136,9 @@ struct SettingsView: View {
             .formStyle(.grouped)
             .tabItem { Label("Tools", systemImage: "wrench.and.screwdriver") }
         }
-        .frame(width: 520, height: 400)
+        // Sized for the tallest tab. General grew when the Finder toggle and the
+        // cleanup picker were added, and at 400 its Queue section fell off the bottom.
+        .frame(width: 540, height: 640)
     }
 
     private func chooseCookieFile() {
