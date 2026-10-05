@@ -21,6 +21,7 @@ enum SelfTest {
         testInvariants()
         testPOTokenProvider()
         testSecurity()
+        testTransientRetry()
         testProgressParsing()
         testDoneParsing()
         testDiagnosis()
@@ -221,6 +222,51 @@ enum SelfTest {
         check(!Prefs.isPotHome(NSTemporaryDirectory()), "an unrelated directory accepted")
         check(Prefs.defaultPotHome.hasSuffix("EasyDL/pot-provider/server"),
               "default location moved: \(Prefs.defaultPotHome)")
+    }
+
+    // MARK: - Retrying things that are only temporarily broken
+
+    private static func testTransientRetry() {
+        // Verbatim from a real failure: a download that failed permanently in the UI
+        // while the very same URL succeeded three times in a row seconds later.
+        let reload = ["ERROR: [youtube] gsIWPj4FtWo: The page needs to be reloaded."]
+        check(YTDLP.isTransient(reload), "the reload error must be retried, not surfaced")
+        check(YTDLP.diagnose(reload) != nil, "and it must be explained if retries run out")
+
+        for t in [["ERROR: unable to connect to host"],
+                  ["ERROR: [Errno 54] Connection reset by peer"],
+                  ["ERROR: The read operation timed out"],
+                  ["ERROR: HTTP Error 429: Too Many Requests"],
+                  ["ERROR: HTTP Error 503: Service Unavailable"]] {
+            check(YTDLP.isTransient(t), "should be treated as temporary: \(t)")
+        }
+
+        // Permanent failures must NOT be retried — retrying them is just slower failure.
+        for t in [["ERROR: [youtube] a: Video unavailable"],
+                  ["ERROR: [youtube] a: Sign in to confirm you\u{2019}re not a bot."],
+                  ["ERROR: unable to download video data: HTTP Error 403: Forbidden"],
+                  ["ERROR: [youtube] a: Private video"],
+                  [], ["[download] 100% of 5.00MiB"]] {
+            check(!YTDLP.isTransient(t), "should NOT be retried as temporary: \(t)")
+        }
+
+        // A 403 is handled by the fallback path, not by the transient one, so the two
+        // cannot both fire and burn the retry budget.
+        check(!YTDLP.isTransient(["HTTP Error 403: Forbidden"]),
+              "a 403 must go down the fallback path, not the transient one")
+        check(YTDLP.isForbidden(["HTTP Error 403: Forbidden"]),
+              "a 403 must still be recognised as such")
+        check(YTDLP.maxAutoRetries >= 1 && YTDLP.maxAutoRetries <= 5,
+              "retry budget should be small and bounded, got \(YTDLP.maxAutoRetries)")
+
+        // The counter has to survive a relaunch or the budget resets every launch.
+        let json = #"[{"url":"https://x","autoRetries":2,"status":"failed"}]"#
+        let back = try? JSONDecoder().decode([DownloadItem].self, from: Data(json.utf8))
+        check(back?.first?.autoRetries == 2, "autoRetries did not round trip")
+        // ...and a queue saved before the field existed still loads.
+        let old = #"[{"url":"https://x","status":"failed"}]"#
+        let legacy = try? JSONDecoder().decode([DownloadItem].self, from: Data(old.utf8))
+        check(legacy?.first?.autoRetries == 0, "older queues must default to 0")
     }
 
     // MARK: - Security

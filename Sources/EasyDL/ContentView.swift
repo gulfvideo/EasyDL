@@ -48,7 +48,7 @@ struct ContentView: View {
             .width(min: 200, ideal: 320)
 
             TableColumn("Status") { item in StatusCell(item: item) }
-                .width(min: 140, ideal: 190)
+                .width(min: 160, ideal: 260)
 
             TableColumn("Format") { item in
                 Text(item.kind == .audioMP3 ? "MP3" : "MP4 · \(item.quality.label)")
@@ -189,10 +189,12 @@ private struct StatusCell: View {
                     .progressViewStyle(.linear)
                     .controlSize(.small)
             } else if item.status == .failed {
-                // Without this the only way to reach the reason is a double-click
-                // nobody thinks to try.
-                Text("Double-click for details")
+                // Say what went wrong on the row itself. Hiding the reason behind a
+                // double-click nobody thinks to try is how "it just failed" happens.
+                Text(YTDLP.diagnose(item.log)?.message ?? "Double-click for details")
                     .font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(.vertical, 2)

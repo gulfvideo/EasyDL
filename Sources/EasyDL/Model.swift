@@ -93,6 +93,8 @@ struct DownloadItem: Identifiable, Codable, Sendable {
     /// Set once we've re-run this with a fallback player client after a 403,
     /// so the retry can never loop.
     var triedFallback = false
+    /// How many times a transient failure has been retried automatically.
+    var autoRetries = 0
     var log: [String] = []              // tail of non-progress output, for the error sheet
 
     /// yt-dlp restarts the percentage for each stream it fetches (video, then audio,
@@ -101,7 +103,7 @@ struct DownloadItem: Identifiable, Codable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id, url, kind, quality, title, status, percent, speed, eta
-        case playlistPosition, filePath, finishedAt, triedFallback, log
+        case playlistPosition, filePath, finishedAt, triedFallback, autoRetries, log
     }
 }
 
@@ -128,6 +130,7 @@ extension DownloadItem {
         filePath         = try c.decodeIfPresent(String.self, forKey: .filePath)
         finishedAt       = try c.decodeIfPresent(Date.self, forKey: .finishedAt)
         triedFallback    = try c.decodeIfPresent(Bool.self, forKey: .triedFallback) ?? false
+        autoRetries      = try c.decodeIfPresent(Int.self, forKey: .autoRetries) ?? 0
         log              = try c.decodeIfPresent([String].self, forKey: .log) ?? []
     }
 }
@@ -434,6 +437,25 @@ enum YTDLP {
                 usual victims. Retry, or choose MP3, which uses a single-file stream.
                 """)
         }
+        if text.contains("page needs to be reloaded") {
+            return Diagnosis(message: """
+                YouTube dropped the session while reading the page. EasyDL already \
+                retried this a few times. It is almost always temporary — wait a moment \
+                and hit Retry, and it usually goes straight through.
+                """)
+        }
+        if text.contains("http error 429") || text.contains("too many requests") {
+            return Diagnosis(message: """
+                The site is rate-limiting you. Wait a few minutes before retrying, and \
+                consider lowering "Download N at a time" in Settings.
+                """)
+        }
+        if text.contains("unable to connect") || text.contains("timed out")
+            || text.contains("temporary failure in name resolution") {
+            return Diagnosis(message: """
+                Could not reach the site. Check your internet connection, then hit Retry.
+                """)
+        }
         // 403 on the media URL specifically — the page was readable, the file wasn't.
         // Nearly always a session that moved on after the cookies were copied.
         if text.contains("403") || text.contains("forbidden") {
@@ -444,6 +466,32 @@ enum YTDLP {
                 """)
         }
         return nil
+    }
+
+    /// Failures that are worth simply trying again, unchanged.
+    ///
+    /// "The page needs to be reloaded" is YouTube's own wording for a session that went
+    /// stale mid-extraction; it clears on a retry seconds later. yt-dlp's
+    /// --extractor-retries does not cover it, so the app has to. Network blips are here
+    /// for the same reason: failing a download permanently because Wi-Fi hiccuped for a
+    /// second is not a real failure.
+    static let maxAutoRetries = 2
+
+    static func isTransient(_ log: [String]) -> Bool {
+        let t = log.joined(separator: "\n").lowercased()
+        guard !t.isEmpty else { return false }
+        return t.contains("page needs to be reloaded")
+            || t.contains("unable to connect")
+            || t.contains("connection reset")
+            || t.contains("connection refused")
+            || t.contains("temporary failure in name resolution")
+            || t.contains("timed out")
+            || t.contains("read timeout")
+            || t.contains("http error 429")        // rate limited
+            || t.contains("http error 500")
+            || t.contains("http error 502")
+            || t.contains("http error 503")
+            || t.contains("http error 504")
     }
 
     /// A 403 on the media URL, which a different player client can usually dodge.

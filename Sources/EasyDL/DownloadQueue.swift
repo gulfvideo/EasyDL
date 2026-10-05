@@ -215,6 +215,16 @@ final class DownloadQueue {
             } else if code == 0 {
                 $0.status = .done
                 $0.percent = 100
+            } else if YTDLP.isTransient($0.log) && $0.autoRetries < YTDLP.maxAutoRetries {
+                // A temporary hiccup is not a failed download. Put it back on the queue
+                // unchanged; the log is kept so the sheet can still explain it if the
+                // retries run out.
+                $0.autoRetries += 1
+                $0.status = .queued
+                $0.percent = 0
+                // Start the log clean so the sheet explains the attempt that actually
+                // gave up, not the first one.
+                $0.log = []
             } else if YTDLP.isForbidden($0.log) && !$0.triedFallback {
                 // Requeue once against a different player client rather than making the
                 // user discover the workaround. `triedFallback` stops this looping.
